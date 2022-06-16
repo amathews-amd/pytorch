@@ -1,8 +1,4 @@
 #undef TH_GENERIC_FILE
-#undef LIBRARY_STATE
-#undef LIBRARY_STATE_NOARGS
-#undef LIBRARY_STATE_TYPE
-#undef LIBRARY_STATE_TYPE_NOARGS
 
 #undef THPTensor_
 #undef THPTensor_stateless_
@@ -15,19 +11,10 @@
 #undef THPTensorStateless
 #undef THPTensorType
 
-#undef THPStorage_
-#undef THPStorageBaseStr
-#undef THPStorageStr
-#undef THPStorageClass
-#undef THPStorageType
+#undef THPTensorPtr
 
 #undef THWTensor
 #undef THWTensor_
-
-#undef THPStoragePtr
-#undef THWTensorPtr
-#undef THPTensorPtr
-
 
 #undef THSPTensor_
 #undef THSPTensor_stateless_
@@ -41,7 +28,3 @@
 #undef THSPTensorType
 
 #undef THSPTensorPtr
-
-
-#undef THHostTensor
-#undef THHostTensor_

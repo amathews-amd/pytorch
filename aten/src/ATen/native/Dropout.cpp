@@ -22,11 +22,11 @@ Tensor make_feature_noise(const Tensor& input) {
     (void)i; //Suppress unused variable warning
     sizes.push_back(1);
   }
-  return at::empty(sizes, input.options());
+  return input.new_empty(sizes);
 }
 
 bool is_fused_kernel_acceptable(const Tensor& input, double p) {
-  return (input.is_cuda() || input.is_xpu()) && p > 0 && p < 1 && input.numel() > 0;
+  return (input.is_cuda() || input.is_xpu() || input.is_lazy()) && p > 0 && p < 1 && input.numel() > 0;
 }
 
 // NB: sure, we could have used different overloads here, but I would feel insecure
@@ -99,11 +99,11 @@ native_dropout_cpu(const Tensor& input, double p, c10::optional<bool> train) {
     double p1m = 1. - p;
     // Check for probability of zero to avoid divide by zero and NaN results
     double scale = p1m == 0 ? 0. : 1. / p1m;
-    mask = at::empty_like(input, LEGACY_CONTIGUOUS_MEMORY_FORMAT);
+    mask = at::empty_like(input, input.options().dtype(c10::CppTypeToScalarType<bool>::value));
     mask.bernoulli_(p1m);
     output = input.mul(mask).mul_(scale);
   } else {
-    mask = at::ones_like(input, LEGACY_CONTIGUOUS_MEMORY_FORMAT);
+    mask = at::ones_like(input, input.options().dtype(c10::CppTypeToScalarType<bool>::value));
     output = input.clone();
   }
   return std::make_tuple(output, mask);

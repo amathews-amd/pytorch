@@ -6,9 +6,6 @@ set -ex
 # (This is set by default in the Docker images we build, so you don't
 # need to set it yourself.
 
-# shellcheck disable=SC2034
-COMPACT_JOB_NAME="${BUILD_ENVIRONMENT}"
-
 # shellcheck source=./common.sh
 source "$(dirname "${BASH_SOURCE[0]}")/common.sh"
 
@@ -20,15 +17,10 @@ if [[ "$BUILD_ENVIRONMENT" == *-mobile-*build* ]]; then
   exec "$(dirname "${BASH_SOURCE[0]}")/build-mobile.sh" "$@"
 fi
 
-if [[ "$BUILD_ENVIRONMENT" == *linux-xenial-cuda11.3* || "$BUILD_ENVIRONMENT" == *linux-bionic-cuda11.5* ]]; then
+if [[ "$BUILD_ENVIRONMENT" == *deploy* ]]; then
   # Enabling DEPLOY build (embedded torch python interpreter, experimental)
   # only on one config for now, can expand later
   export USE_DEPLOY=ON
-
-  # Deploy feature builds cpython. It requires these packages.
-  # TODO move this to dockerfile?
-  sudo apt-get -qq update
-  sudo apt-get -qq install libffi-dev libbz2-dev libreadline-dev libncurses5-dev libncursesw5-dev libgdbm-dev libsqlite3-dev uuid-dev tk-dev
 fi
 
 echo "Python version:"
@@ -39,6 +31,9 @@ gcc --version
 
 echo "CMake version:"
 cmake --version
+
+echo "Environment variables:"
+env
 
 if [[ "$BUILD_ENVIRONMENT" == *cuda* ]]; then
   echo "NVCC version:"
@@ -73,7 +68,7 @@ if ! which conda; then
   # In ROCm CIs, we are doing cross compilation on build machines with
   # intel cpu and later run tests on machines with amd cpu.
   # Also leave out two builds to make sure non-mkldnn builds still work.
-  if [[ "$BUILD_ENVIRONMENT" != *rocm* && "$BUILD_ENVIRONMENT" != *-trusty-py3.5-* ]]; then
+  if [[ "$BUILD_ENVIRONMENT" != *rocm* ]]; then
     pip_install mkl mkl-devel
     export USE_MKLDNN=1
   else
@@ -142,29 +137,14 @@ if [[ "$BUILD_ENVIRONMENT" == *rocm* ]]; then
     export MAX_JOBS=$(($(nproc) - 1))
   fi
 
-  if [[ -n "$IN_CI" && -z "$PYTORCH_ROCM_ARCH" ]]; then
+  if [[ -n "$CI" && -z "$PYTORCH_ROCM_ARCH" ]]; then
       # Set ROCM_ARCH to gfx900 and gfx906 for CI builds, if user doesn't override.
       echo "Limiting PYTORCH_ROCM_ARCH to gfx90[06] for CI builds"
       export PYTORCH_ROCM_ARCH="gfx900;gfx906"
   fi
 
+  # hipify sources
   python tools/amd_build/build_amd.py
-  python setup.py install
-
-  # remove sccache wrappers post-build; runtime compilation of MIOpen kernels does not yet fully support them
-  sudo rm -f /opt/cache/bin/cc
-  sudo rm -f /opt/cache/bin/c++
-  sudo rm -f /opt/cache/bin/gcc
-  sudo rm -f /opt/cache/bin/g++
-  pushd /opt/rocm/llvm/bin
-  if [[ -d original ]]; then
-    sudo mv original/clang .
-    sudo mv original/clang++ .
-  fi
-  sudo rm -rf original
-  popd
-
-  exit 0
 fi
 
 # sccache will fail for CUDA builds if all cores are used for compiling
@@ -183,20 +163,27 @@ if [[ "$BUILD_ENVIRONMENT" == *xenial-cuda11.1*build ]]; then
   export TORCH_CUDA_ARCH_LIST=$TORCH_CUDA_ARCH_LIST";7.5"
 fi
 
-if [[ "$BUILD_ENVIRONMENT" == *ppc64le* ]]; then
-  export TORCH_CUDA_ARCH_LIST="6.0"
-fi
-
 if [[ "${BUILD_ENVIRONMENT}" == *clang* ]]; then
   export CC=clang
   export CXX=clang++
 fi
 
-if [[ "${BUILD_ENVIRONMENT}" == *linux-xenial-py3.6-gcc7-build* || "${BUILD_ENVIRONMENT}" == *linux-xenial-py3.6-gcc5.4-build* ]]; then
+if [[ "${BUILD_ENVIRONMENT}" == *no-ops* ]]; then
+  export USE_PER_OPERATOR_HEADERS=0
+fi
+
+if [[ "${BUILD_ENVIRONMENT}" == *linux-focal-py3.7-gcc7-build*  ]]; then
   export USE_GLOO_WITH_OPENSSL=ON
 fi
 
+# TODO: Remove after xenial->focal migration
 if [[ "${BUILD_ENVIRONMENT}" == pytorch-linux-xenial-py3* ]]; then
+  if [[ "${BUILD_ENVIRONMENT}" != *android* && "${BUILD_ENVIRONMENT}" != *cuda* ]]; then
+    export BUILD_STATIC_RUNTIME_BENCHMARK=ON
+  fi
+fi
+
+if [[ "${BUILD_ENVIRONMENT}" == pytorch-linux-focal-py3* ]]; then
   if [[ "${BUILD_ENVIRONMENT}" != *android* && "${BUILD_ENVIRONMENT}" != *cuda* ]]; then
     export BUILD_STATIC_RUNTIME_BENCHMARK=ON
   fi
@@ -207,11 +194,10 @@ if [[ "$BUILD_ENVIRONMENT" == *-bazel-* ]]; then
 
   get_bazel
 
-  # first build the whole torch for CPU-only
-  tools/bazel build --config=no-tty :torch
-  # then build selected set of targets with GPU-support.
-  # TODO: eventually this should converge to building the whole :torch with GPU-support
-  tools/bazel build --config=no-tty --config=gpu :c10
+  tools/bazel build --config=no-tty //...
+  # Build torch, the Python module, and tests for CPU-only
+  tools/bazel build --config=no-tty --config=cpu-only :torch :_C.so :all_tests
+
 else
   # check that setup.py would fail with bad arguments
   echo "The next three invocations are expected to fail with invalid command error messages."
@@ -221,26 +207,20 @@ else
 
   if [[ "$BUILD_ENVIRONMENT" != *libtorch* ]]; then
 
-    # ppc64le build fails when WERROR=1
+    # rocm builds fail when WERROR=1
+    # XLA test build fails when WERROR=1
     # set only when building other architectures
-    # only use for "python setup.py install" line
-    if [[ "$BUILD_ENVIRONMENT" != *ppc64le* && "$BUILD_ENVIRONMENT" != *clang* ]]; then
+    # or building non-XLA tests.
+    if [[ "$BUILD_ENVIRONMENT" != *rocm*  &&
+          "$BUILD_ENVIRONMENT" != *xla* ]]; then
       WERROR=1 python setup.py bdist_wheel
-      python -mpip install dist/*.whl
     else
       python setup.py bdist_wheel
-      python -mpip install dist/*.whl
     fi
+    python -mpip install dist/*.whl
 
     # TODO: I'm not sure why, but somehow we lose verbose commands
     set -x
-
-    if which sccache > /dev/null; then
-      echo 'PyTorch Build Statistics'
-      sccache --show-stats
-
-      sccache --show-stats | python -m tools.stats.upload_sccache_stats
-    fi
 
     assert_git_not_dirty
     # Copy ninja build logs to dist folder
@@ -249,7 +229,24 @@ else
       cp build/.ninja_log dist
     fi
 
-    CUSTOM_TEST_ARTIFACT_BUILD_DIR=${CUSTOM_TEST_ARTIFACT_BUILD_DIR:-${PWD}/../}
+    if [[ "$BUILD_ENVIRONMENT" == *rocm* ]]; then
+      # remove sccache wrappers post-build; runtime compilation of MIOpen kernels does not yet fully support them
+      sudo rm -f /opt/cache/bin/cc
+      sudo rm -f /opt/cache/bin/c++
+      sudo rm -f /opt/cache/bin/gcc
+      sudo rm -f /opt/cache/bin/g++
+      pushd /opt/rocm/llvm/bin
+      if [[ -d original ]]; then
+        sudo mv original/clang .
+        sudo mv original/clang++ .
+      fi
+      sudo rm -rf original
+      popd
+    fi
+
+    CUSTOM_TEST_ARTIFACT_BUILD_DIR=${CUSTOM_TEST_ARTIFACT_BUILD_DIR:-"build/custom_test_artifacts"}
+    CUSTOM_TEST_USE_ROCM=$([[ "$BUILD_ENVIRONMENT" == *rocm* ]] && echo "ON" || echo "OFF")
+    CUSTOM_TEST_MODULE_PATH="${PWD}/cmake/public"
     mkdir -pv "${CUSTOM_TEST_ARTIFACT_BUILD_DIR}"
 
     # Build custom operator tests.
@@ -259,7 +256,8 @@ else
     SITE_PACKAGES="$(python -c 'from distutils.sysconfig import get_python_lib; print(get_python_lib())')"
     mkdir -p "$CUSTOM_OP_BUILD"
     pushd "$CUSTOM_OP_BUILD"
-    cmake "$CUSTOM_OP_TEST" -DCMAKE_PREFIX_PATH="$SITE_PACKAGES/torch" -DPYTHON_EXECUTABLE="$(which python)"
+    cmake "$CUSTOM_OP_TEST" -DCMAKE_PREFIX_PATH="$SITE_PACKAGES/torch" -DPYTHON_EXECUTABLE="$(which python)" \
+          -DCMAKE_MODULE_PATH="$CUSTOM_TEST_MODULE_PATH" -DUSE_ROCM="$CUSTOM_TEST_USE_ROCM"
     make VERBOSE=1
     popd
     assert_git_not_dirty
@@ -271,7 +269,8 @@ else
     SITE_PACKAGES="$(python -c 'from distutils.sysconfig import get_python_lib; print(get_python_lib())')"
     mkdir -p "$JIT_HOOK_BUILD"
     pushd "$JIT_HOOK_BUILD"
-    cmake "$JIT_HOOK_TEST" -DCMAKE_PREFIX_PATH="$SITE_PACKAGES/torch" -DPYTHON_EXECUTABLE="$(which python)"
+    cmake "$JIT_HOOK_TEST" -DCMAKE_PREFIX_PATH="$SITE_PACKAGES/torch" -DPYTHON_EXECUTABLE="$(which python)" \
+          -DCMAKE_MODULE_PATH="$CUSTOM_TEST_MODULE_PATH" -DUSE_ROCM="$CUSTOM_TEST_USE_ROCM"
     make VERBOSE=1
     popd
     assert_git_not_dirty
@@ -282,7 +281,8 @@ else
     python --version
     mkdir -p "$CUSTOM_BACKEND_BUILD"
     pushd "$CUSTOM_BACKEND_BUILD"
-    cmake "$CUSTOM_BACKEND_TEST" -DCMAKE_PREFIX_PATH="$SITE_PACKAGES/torch" -DPYTHON_EXECUTABLE="$(which python)"
+    cmake "$CUSTOM_BACKEND_TEST" -DCMAKE_PREFIX_PATH="$SITE_PACKAGES/torch" -DPYTHON_EXECUTABLE="$(which python)" \
+          -DCMAKE_MODULE_PATH="$CUSTOM_TEST_MODULE_PATH" -DUSE_ROCM="$CUSTOM_TEST_USE_ROCM"
     make VERBOSE=1
     popd
     assert_git_not_dirty
@@ -304,3 +304,5 @@ if [[ "$BUILD_ENVIRONMENT" != *libtorch* && "$BUILD_ENVIRONMENT" != *bazel* ]]; 
   # don't do this for libtorch as libtorch is C++ only and thus won't have python tests run on its build
   python test/run_test.py --export-past-test-times
 fi
+
+print_sccache_stats

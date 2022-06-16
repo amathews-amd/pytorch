@@ -13,6 +13,7 @@
 #include <ATen/core/dispatch/OperatorOptions.h>
 #include <ATen/core/dispatch/CppSignature.h>
 #include <ATen/core/dispatch/RegistrationHandleRAII.h>
+#include <ATen/core/enum_tag.h>
 
 #include <list>
 #include <array>
@@ -98,7 +99,7 @@ public:
   // attempt to register a schema when one is already present or vice
   // versa that is an error.  (Refcounting for the registrations is
   // handled in the OperatorHandle in Dispatcher)
-  void registerSchema(FunctionSchema&&, std::string&& debug);
+  void registerSchema(FunctionSchema&&, std::string&& debug, std::vector<at::Tag> tags = {});
   void deregisterSchema();
 
   const OperatorName& operator_name() const {
@@ -161,18 +162,22 @@ public:
 
   // Asserts that the given FuncType is correct for calling this operator in an unboxed way.
   template<class FuncType>
-  void assertSignatureIsCorrect() {
-    if (C10_UNLIKELY(cpp_signature_.has_value() && (CppSignature::make<FuncType>() != cpp_signature_->signature))) {
-      reportSignatureError(CppSignature::make<FuncType>().name());
+  inline void assertSignatureIsCorrect() {
+    assertSignatureIsCorrect(CppSignature::make<FuncType>());
+  }
+
+  void assertSignatureIsCorrect(const CppSignature call_signature) {
+    if (C10_UNLIKELY(cpp_signature_.has_value() && (call_signature != cpp_signature_->signature))) {
+      reportSignatureError(call_signature);
     }
   }
 
   [[noreturn]] void reportError(DispatchKey dispatchKey) const;
 
-  const KernelFunction& lookup(DispatchKey k) const {
-    const auto idx = getDispatchTableIndexForDispatchKey(k);
+  const KernelFunction& lookup(DispatchKeySet ks) const {
+    const auto idx = ks.getDispatchTableIndexForDispatchKeySet();
     if (C10_UNLIKELY(idx == -1)) {
-      reportError(k);
+      reportError(ks.highestPriorityTypeId());
     }
     const auto& kernel = dispatchTable_[idx];
     // A valid kernel *always* has a boxed kernel and *may* have an
@@ -183,7 +188,7 @@ public:
     // in the common case.
     if (C10_UNLIKELY(!kernel.isValidUnboxed())) {
       if (!kernel.isValid()) {
-        reportError(k);
+        reportError(ks.highestPriorityTypeId());
       }
     }
     return kernel;
@@ -201,13 +206,17 @@ public:
   bool hasKernelForAnyDispatchKey(DispatchKeySet ks) const;
   // Returns true if kernel_ has entry for a particular key.
   bool hasKernelForDispatchKey(DispatchKey k) const;
+  // Returns all the operator tags added at the time of registration
+  const std::vector<at::Tag>& getTags() const;
 
 private:
 
   OperatorName name_;
   c10::optional<AnnotatedSchema> schema_;
-
-  std::array<KernelFunction, c10::getDispatchTableIndexForDispatchKey(DispatchKey::NumDispatchKeys)> dispatchTable_;
+  #ifndef C10_MOBILE
+    std::vector<at::Tag> tags_;
+  #endif
+  std::array<KernelFunction, c10::num_runtime_entries> dispatchTable_;
   DispatchKeyExtractor dispatchKeyExtractor_;
 
   // kernels_ stores all registered kernels for the corresponding dispatch key
@@ -269,7 +278,7 @@ private:
   // Whether this operator needs to be observed with RecordFunction
   const bool is_observed_;
 
-  [[noreturn]] void reportSignatureError(std::string name) const;
+  [[noreturn]] void reportSignatureError(CppSignature call_signature) const;
   const KernelFunction& computeDispatchTableEntry(const c10::Dispatcher& dispatcher, DispatchKey dispatch_key) const;
   std::pair<const AnnotatedKernel&, const char*> computeDispatchTableEntryWithDebug(
     const c10::Dispatcher& dispatcher, DispatchKey dispatch_key

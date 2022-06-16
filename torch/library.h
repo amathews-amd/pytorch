@@ -61,12 +61,11 @@
 #include <ATen/core/op_registration/infer_schema.h>
 #include <ATen/core/op_registration/op_allowlist.h>
 #include <c10/core/DispatchKey.h>
-#if defined(EXPOSE_C2_OPS) || !defined(CAFFE2_IS_XPLAT_BUILD)
 #include <torch/csrc/jit/frontend/function_schema_parser.h>
-#endif
 
 // Just for inferFunctionSchemaFromFunctor
 #include <ATen/core/op_registration/op_registration.h>
+#include <ATen/core/enum_tag.h>
 
 namespace torch {
 
@@ -196,6 +195,12 @@ class TORCH_API CppFunction final {
         schema_(nullptr),
         debug_() {}
 #endif
+
+  ~CppFunction();
+
+  CppFunction(CppFunction&&) noexcept = default;
+
+  CppFunction& operator=(CppFunction&&) = default;
 
   /// This creates a fallthrough function.  Fallthrough functions
   /// immediately redispatch to the next available dispatch key,
@@ -351,12 +356,14 @@ inline CppFunction dispatch(c10::DeviceType type, Func&& raw_f) {
         return c10::DispatchKey::CPU;
       case c10::DeviceType::CUDA:
         return c10::DispatchKey::CUDA;
+      case c10::DeviceType::IPU:
+        return c10::DispatchKey::IPU;
       case c10::DeviceType::XLA:
         return c10::DispatchKey::XLA;
       case c10::DeviceType::Lazy:
         return c10::DispatchKey::Lazy;
-      case c10::DeviceType::MLC:
-        return c10::DispatchKey::MLC;
+      case c10::DeviceType::MPS:
+        return c10::DispatchKey::MPS;
       case c10::DeviceType::Meta:
         return c10::DispatchKey::Meta;
       case c10::DeviceType::HIP:
@@ -365,6 +372,8 @@ inline CppFunction dispatch(c10::DeviceType type, Func&& raw_f) {
         return c10::DispatchKey::ORT;
       case c10::DeviceType::HPU:
         return c10::DispatchKey::HPU;
+      case c10::DeviceType::PrivateUse1:
+        return c10::DispatchKey::PrivateUse1;
       default:
         TORCH_CHECK(
             false,
@@ -586,12 +595,12 @@ class TORCH_API Library final {
   ///   m.def("add(Tensor self, Tensor other) -> Tensor");
   /// }
   /// ```
-  template <typename Schema>
-  Library& def(Schema&& raw_schema) & {
-    c10::FunctionSchema s = schema(std::forward<Schema>(raw_schema));
-    return _def(std::move(s));
-  }
 
+  template <typename Schema>
+  Library& def(Schema&& raw_schema, const std::vector<at::Tag>& tags = {}) & {
+    c10::FunctionSchema s = schema(std::forward<Schema>(raw_schema));
+    return _def(std::move(s), nullptr, tags);
+  }
   /// Define an operator for a schema and then register an implementation for
   /// it.  This is typically what you would use if you aren't planning
   /// on making use of the dispatcher to structure your operator
@@ -682,7 +691,7 @@ class TORCH_API Library final {
   }
 
   template <typename Name, typename Func>
-  Library& impl_UNBOXED(Name name, Func* raw_f) & {
+  Library& impl_UNBOXED(Name /*name*/, Func* /*raw_f*/) & {
     static_assert(
         c10::guts::false_t<Func>(),
         ".impl_UNBOXED(...) was removed. Please use .impl(...) instead.");
@@ -699,7 +708,7 @@ class TORCH_API Library final {
     return def(raw_schema.operator const char*());
   }
   template <typename Func>
-  Library& def(detail::SelectiveStr<false>, Func&& raw_f) & {
+  Library& def(detail::SelectiveStr<false>, Func&& /*raw_f*/) & {
     return *this;
   }
   template <typename Func>
@@ -709,15 +718,15 @@ class TORCH_API Library final {
   }
 
   template <typename Func>
-  Library& impl(detail::SelectiveStr<false>, Func&& raw_f) & {
+  Library& impl(detail::SelectiveStr<false>, Func&& /*raw_f*/) & {
     return *this;
   }
   template <typename Dispatch, typename Func>
-  Library& impl(detail::SelectiveStr<false>, Dispatch&& key, Func&& raw_f) & {
+  Library& impl(detail::SelectiveStr<false>, Dispatch&& /*key*/, Func&& /*raw_f*/) & {
     return *this;
   }
   template <typename Func>
-  Library& impl_UNBOXED(detail::SelectiveStr<false> name, Func* raw_f) & {
+  Library& impl_UNBOXED(detail::SelectiveStr<false> /*name*/, Func* /*raw_f*/) & {
     static_assert(
         c10::guts::false_t<Func>(),
         ".impl_UNBOXED(...) was removed. Please use .impl(...) instead.");
@@ -739,7 +748,7 @@ class TORCH_API Library final {
         std::forward<Func>(raw_f));
   }
   template <typename Func>
-  Library& impl_UNBOXED(detail::SelectiveStr<true> name, Func* raw_f) & {
+  Library& impl_UNBOXED(detail::SelectiveStr<true> /*name*/, Func* /*raw_f*/) & {
     static_assert(
         c10::guts::false_t<Func>(),
         ".impl_UNBOXED(...) was removed. Please use .impl(...) instead.");
@@ -805,7 +814,8 @@ class TORCH_API Library final {
   // public because we only implement & qualifier and not && qualifier
   Library& _def(
       c10::FunctionSchema&& schema,
-      c10::OperatorName* out_name = nullptr) &;
+      c10::OperatorName* out_name = nullptr,
+      const std::vector<at::Tag>& tags = {}) &;
   Library& _def(
       c10::either<c10::OperatorName, c10::FunctionSchema>&&,
       CppFunction&& f) &;

@@ -61,8 +61,7 @@ signature.
 - `int`. Think about this like a Python int. This is translated into a C++ argument of type `int64_t`.
 - `float`. Think about this like a Python `float`. It is translated into a C++ argument of type `double`.
 - `bool`
-- `str`.  It is translated into a C++ argument of type `std::string`
-  (but we should fix this, see https://github.com/pytorch/pytorch/issues/53546)
+- `str`.  It is translated into a C++ argument of non-owning type `c10::string_view`
 - `Scalar`. `Scalar` supports binding to any numerical types from Python, including integral types,
   floating point types, and zero dimensional tensors. `int` and `float` bind to the corresponding Python
   numerical types. However, you probably don't want to use `Scalar`;
@@ -292,8 +291,8 @@ If two backends have the same dispatch function, you can write `CPU, CUDA: func`
 to reuse the same function name in both cases.
 
 Available backend options can be found by searching `dispatch_keys` in
-[codegen](https://github.com/pytorch/pytorch/blob/master/tools/codegen/gen.py).
-There are also two special "generic" backends:
+[codegen](https://github.com/pytorch/pytorch/blob/master/torchgen/gen.py).
+There are also three special "generic" backends:
 
   - `CompositeExplicitAutograd` (previously known as `DefaultBackend`):
     implementations of kernels that work for all backends, but require an
@@ -305,6 +304,18 @@ There are also two special "generic" backends:
     kernel to every backend (e.g., `CPU, CUDA`). Note: kernels which call
     DispatchStub should NOT be registered as CompositeExplicitAutograd, as
     DispatchStub only works for `CPU, CUDA`)
+
+  - `CompositeExplicitAutogradNonFunctional`:
+    Similar to CompositeExplicitAutograd, but this key should be used if:
+    (1) Your kernel is written for a non-aliasing operator.
+    (2) *and* it calls internally into an aliasing operator.
+    An example of this is select_backward, which is non-aliasing, but decomposes into select.
+    We would like to distinguish between "ordinary" CompositeExplicitAutograd kernels
+    and these kernels, because some backends would not like
+    to decompose an non-aliasing op into an aliasing op.
+    LazyTensor + XLA are the two current examples of this - since they operate on a functional IR,
+    they would prefer to directly implement a non-aliasing operator with their own kernel,
+    instead of using a decomposition that results in more aliasing operators.
 
   - `CompositeImplicitAutograd` (previously known as `Math`): implementations of
     kernels that work for all backends, and also can implicitly support autograd,
@@ -412,9 +423,9 @@ By default, ATen code generation will generate device check,
 which will ensure all the tensor parameters passed to kernel are
 on the same device.
 
-However, in some cases, checking the device is unncessary, becuase,
+However, in some cases, checking the device is unncessary, because,
 e.g., you call a function allows to work on multiple devices.
-In that case, code generation of the device check can e disabled by adding
+In that case, code generation of the device check can be disabled by adding
 `device_check: NoCheck` to your function definition.
 
 ### `manual_kernel_registration`
@@ -517,7 +528,7 @@ Here're steps to follow to decide the right dispatch keyword:
 
       You're done. This op will be called in inference for all backends.
 
-      Note: to support training you're required to add a autograd formula,
+      Note: to support training you're required to add an autograd formula,
       or it'll error out in backward pass when calling with a Tensor has requires_grad=True.
 
     - No: ops in this category are mainly using `_out` boilerplate where its out version doesn't have a derivative
@@ -543,7 +554,7 @@ Here're steps to follow to decide the right dispatch keyword:
       Note: current plan on record for ops using this boilerplate is to replace `at::` with `at::native` in
       the implementations and add dispatch section with device keywords instead.
 3. Validate the computed dispatch table matches what you want. You can use `PythonDispatcher` provided in
-[torch/_python_dispatcher.py](https://github.com/pytorch/pytorch/blob/master/torch/_python_dispacher.py).
+[torch/_python_dispatcher.py](https://github.com/pytorch/pytorch/blob/master/torch/_python_dispatcher.py).
 It shows for a certain operator, what the computed dispatch table looks like after your registrations.
 
     ```

@@ -41,6 +41,7 @@ inline void sub_check(const TensorBase& self, const Scalar& scalar) {
 }
 
 using structured_binary_fn_alpha = void(*)(TensorIteratorBase&, const Scalar& alpha);
+using structured_binary_fn_double = void(*)(TensorIteratorBase&, double);
 using structured_binary_fn = void(*)(TensorIteratorBase&);
 
 using binary_fn_alpha = void(*)(TensorIteratorBase&, const Scalar& alpha);
@@ -49,7 +50,9 @@ using binary_fn = void(*)(TensorIterator&);
 using binary_clamp_fn_alpha =
     void(*)(TensorIterator&, const Scalar& alpha, const Scalar& min_val, const Scalar& max_val);
 
+// NB: codegenned
 DECLARE_DISPATCH(structured_binary_fn_alpha, add_stub);
+
 DECLARE_DISPATCH(binary_clamp_fn_alpha, add_clamp_stub);
 DECLARE_DISPATCH(structured_binary_fn_alpha, sub_stub);
 DECLARE_DISPATCH(structured_binary_fn, mul_stub);
@@ -78,12 +81,12 @@ DECLARE_DISPATCH(structured_binary_fn, maximum_stub);
 DECLARE_DISPATCH(structured_binary_fn, minimum_stub);
 DECLARE_DISPATCH(structured_binary_fn, fmax_stub);
 DECLARE_DISPATCH(structured_binary_fn, fmin_stub);
-DECLARE_DISPATCH(binary_fn_double, smooth_l1_stub);
+DECLARE_DISPATCH(structured_binary_fn_double, smooth_l1_stub);
 DECLARE_DISPATCH(binary_fn_double, huber_stub);
 DECLARE_DISPATCH(structured_binary_fn, sigmoid_backward_stub);
 DECLARE_DISPATCH(binary_fn_alpha, logit_backward_stub);
 DECLARE_DISPATCH(structured_binary_fn, tanh_backward_stub);
-DECLARE_DISPATCH(binary_fn, mse_stub);
+DECLARE_DISPATCH(structured_binary_fn, mse_stub);
 DECLARE_DISPATCH(structured_binary_fn, fmod_stub);
 DECLARE_DISPATCH(structured_binary_fn, logaddexp_stub);
 DECLARE_DISPATCH(structured_binary_fn, logaddexp2_stub);
@@ -98,5 +101,17 @@ DECLARE_DISPATCH(structured_binary_fn, copysign_stub);
 DECLARE_DISPATCH(structured_binary_fn, xlogy_stub);
 DECLARE_DISPATCH(structured_binary_fn, xlog1py_stub);
 DECLARE_DISPATCH(structured_binary_fn, zeta_stub);
+DECLARE_DISPATCH(structured_binary_fn, chebyshev_polynomial_t_stub);
+DECLARE_DISPATCH(structured_binary_fn, chebyshev_polynomial_u_stub);
+DECLARE_DISPATCH(structured_binary_fn, chebyshev_polynomial_v_stub);
+DECLARE_DISPATCH(structured_binary_fn, chebyshev_polynomial_w_stub);
+DECLARE_DISPATCH(structured_binary_fn, hermite_polynomial_h_stub);
+DECLARE_DISPATCH(structured_binary_fn, hermite_polynomial_he_stub);
+DECLARE_DISPATCH(structured_binary_fn, laguerre_polynomial_l_stub);
+DECLARE_DISPATCH(structured_binary_fn, legendre_polynomial_p_stub);
+DECLARE_DISPATCH(structured_binary_fn, shifted_chebyshev_polynomial_t_stub);
+DECLARE_DISPATCH(structured_binary_fn, shifted_chebyshev_polynomial_u_stub);
+DECLARE_DISPATCH(structured_binary_fn, shifted_chebyshev_polynomial_v_stub);
+DECLARE_DISPATCH(structured_binary_fn, shifted_chebyshev_polynomial_w_stub);
 
 }} // namespace at::native

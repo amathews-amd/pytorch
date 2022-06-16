@@ -8,6 +8,7 @@
 #include <torch/csrc/jit/api/function_impl.h>
 #include <torch/csrc/jit/serialization/pickler.h>
 #include <string>
+#include <type_traits>
 
 namespace torch {
 namespace jit {
@@ -374,6 +375,18 @@ void Pickler::pushLiteralSparseTensor(const at::Tensor& tensor) {
       // values
       pushTensor(tensor._values());
       break;
+    case static_cast<int>(c10::Layout::SparseCsr):
+      push<PickleOpCode>(PickleOpCode::MARK);
+      for (auto size : tensor.sizes()) {
+        pushInt(size);
+      }
+      push<PickleOpCode>(PickleOpCode::TUPLE);
+
+      pushIValue(tensor.requires_grad());
+      pushTensor(tensor.crow_indices());
+      pushTensor(tensor.col_indices());
+      pushTensor(tensor.values());
+      break;
     default:
       TORCH_CHECK(
           false,
@@ -563,7 +576,11 @@ void Pickler::endTypeTag(const IValue& ivalue) {
 
   // Push the dict type
   TORCH_INTERNAL_ASSERT(ivalue.type());
-  pushString(ivalue.type()->annotation_str());
+  auto type = ivalue.type();
+  if (auto dyn = type->castRaw<c10::DynamicType>()) {
+    type = dyn->fallback();
+  }
+  pushString(type->annotation_str());
 
   // Pop the dict and type into a tuple
   push<PickleOpCode>(PickleOpCode::TUPLE2);
@@ -579,17 +596,18 @@ void Pickler::pushDict(const IValue& ivalue) {
 
   push<PickleOpCode>(PickleOpCode::EMPTY_DICT);
 
-  if (dict.size() >= 0) {
-    push<PickleOpCode>(PickleOpCode::MARK);
+  static_assert(
+      std::is_unsigned<decltype(dict.size())>::value,
+      "Expected size to be non-negative.");
+  push<PickleOpCode>(PickleOpCode::MARK);
 
-    // Sort the dict for deterministic keys
-    for (const auto& entry : dict) {
-      pushIValue(entry.key());
-      pushIValue(entry.value());
-    }
-
-    push<PickleOpCode>(PickleOpCode::SETITEMS);
+  // Sort the dict for deterministic keys
+  for (const auto& entry : dict) {
+    pushIValue(entry.key());
+    pushIValue(entry.value());
   }
+
+  push<PickleOpCode>(PickleOpCode::SETITEMS);
 
   endTypeTag(ivalue);
 }

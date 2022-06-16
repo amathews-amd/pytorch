@@ -2,6 +2,7 @@
 #include <c10d/ProcessGroup.hpp>
 
 #include <c10/util/Logging.h>
+#include <fmt/format.h>
 
 namespace c10d {
 
@@ -44,12 +45,14 @@ std::string opTypeToString(OpType opType) {
     case OpType::_REDUCE_SCATTER_BASE:
       return "_REDUCE_SCATTER_BASE";
     default:
-      TORCH_INTERNAL_ASSERT("Unknown op type!");
+      TORCH_INTERNAL_ASSERT(false, "Unknown op type!");
   }
   return "UNKNOWN";
 }
 
-bool isP2POp(OpType opType) {
+bool isP2POp(OpType opType, bool batchP2P /*= false*/) {
+  if (batchP2P)
+    return false;
   return opType == OpType::SEND || opType == OpType::RECV ||
       opType == OpType::RECVANYSOURCE;
 }
@@ -73,11 +76,13 @@ ProcessGroup::Work::Work(
       if (inputTensors) {
         inputs.reserve(inputTensors->size());
         for (const auto& tensor : *inputTensors) {
-          inputs.push_back(tensor);
+          inputs.emplace_back(tensor);
         }
       }
-      recordingFunction->before(profilingTitle, inputs);
-      std::function<void()> end_handler = [this, recordingFunction]() {
+      recordingFunction->before(
+          profilingTitle,
+          c10::ArrayRef<const c10::IValue>(inputs.data(), inputs.size()));
+      std::function<void()> end_handler = [recordingFunction]() {
         recordingFunction->end();
       };
       recordFunctionEndCallback_ = at::wrapPropagateTLSState(end_handler);
@@ -89,7 +94,7 @@ OpType ProcessGroup::Work::retrieveOpType() {
   return opType_;
 }
 
-ProcessGroup::Work::~Work() {}
+ProcessGroup::Work::~Work() = default;
 
 bool ProcessGroup::Work::isCompleted() {
   std::lock_guard<std::mutex> lock(mutex_);
@@ -107,7 +112,8 @@ std::exception_ptr ProcessGroup::Work::exception() const {
 }
 
 int ProcessGroup::Work::sourceRank() const {
-  TORCH_CHECK(false,
+  TORCH_CHECK(
+      false,
       "sourceRank() may only be called on work objects "
       "that correspond to a recv or recv-from-any call.");
 }
@@ -174,10 +180,15 @@ void ProcessGroup::Work::finishAndThrow(std::exception_ptr exception) {
 }
 
 ProcessGroup::ProcessGroup(int rank, int size)
-    : rank_(rank), size_(size), dist_debug_level_(parseDistDebugLevel()) {
+    : rank_(rank), size_(size), dist_debug_level_(debug_level()) {
   C10_LOG_API_USAGE_ONCE("c10d.process_group");
 }
 
 ProcessGroup::~ProcessGroup() {}
+
+void ProcessGroup::init() {
+  C10_LOG_API_USAGE_ONCE(
+      fmt::format("c10d.process_group_{}", getBackendName()));
+}
 
 } // namespace c10d
